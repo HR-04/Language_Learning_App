@@ -2,6 +2,7 @@ import streamlit as st
 from util import create_conversation_chain, store_mistake
 import sqlite3
 import uuid
+from langchain_core.messages import AIMessage, HumanMessage
 
 def init_session_state():
     if "conversation" not in st.session_state:
@@ -12,6 +13,8 @@ def init_session_state():
         st.session_state.config = {}
     if "session_id" not in st.session_state:
         st.session_state.session_id = str(uuid.uuid4())
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = []
 
 init_session_state()
 
@@ -45,6 +48,7 @@ with st.sidebar:
             }
             st.session_state.session_id = str(uuid.uuid4())
             st.session_state.messages = []
+            st.session_state.chat_history = []
             st.rerun()
         else:
             st.error("Please specify both languages")
@@ -54,64 +58,111 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.write(message["content"])
 
-# Update the response processing section
+def process_response(response):
+    """Helper function to handle different response types"""
+    if hasattr(response, 'content'):
+        return response.content, getattr(response, 'tool_calls', [])
+    elif isinstance(response, dict):
+        ai_message = response.get('messages', [{}])[0]
+        content = ai_message.get('content', '') if isinstance(ai_message, dict) else getattr(ai_message, 'content', '')
+        tool_calls = ai_message.get('tool_calls', []) if isinstance(ai_message, dict) else getattr(ai_message, 'tool_calls', [])
+        return content, tool_calls
+    return str(response), []
+
 if prompt := st.chat_input("Type your message..."):
+    # Add user message to both display and history
     st.session_state.messages.append({"role": "user", "content": prompt})
+    st.session_state.chat_history.append(HumanMessage(content=prompt))
     
     with st.spinner("Thinking..."):
-        # Get AI response
-        response = st.session_state.conversation.invoke(
-            {"input": prompt, **st.session_state.config},
-            config={"configurable": {"session_id": st.session_state.session_id}}
-        )
-        print(f"response : {response}")
-        
-        # Process tool calls first
-        if hasattr(response, 'tool_calls'):
-            print(f"response Tool calls : {response.tool_calls}")
-            for tool_call in response.tool_calls:
-                print(f"tool_call : {tool_call}")
-                if tool_call['name'] == 'log_mistake':
-                    args = tool_call['args']
-                    print(f"args : {args}")
-                    store_mistake(
-                        native_lang=args['native_lang'],
-                        target_lang=args['target_lang'],
-                        error_sentence=args['error_sentence'],
-                        corrected_sentence=args['corrected_sentence'],
-                        error_type=args['error_type']
-                    )
-        
-        # Get final response text
-        response_content = response.content
-        
-        # If no content but tool calls, get follow-up
-        if not response_content:
-            follow_up = st.session_state.conversation.invoke(
-                {"input": "Continue the conversation naturally", **st.session_state.config},
+        try:
+            # Prepare input with all required parameters
+            input_data = {
+                "input": prompt,
+                "native_language": st.session_state.config['native_language'],
+                "learning_language": st.session_state.config['learning_language'],
+                "proficiency_level": st.session_state.config['proficiency_level'],
+                "scenario": st.session_state.config['scenario'],
+                "chat_history": st.session_state.chat_history
+            }
+            
+            # Get initial response
+            response = st.session_state.conversation.invoke(
+                input_data,
                 config={"configurable": {"session_id": st.session_state.session_id}}
             )
-            response_content = follow_up.content
-
-        st.session_state.messages.append({
-            "role": "assistant", 
-            "content": response_content
-        })
+            
+            # Process the response
+            response_content, tool_calls = process_response(response)
+            
+            # Process tool calls if any
+            if tool_calls:
+                for tool_call in tool_calls:
+                    if tool_call['name'] == 'log_mistake':
+                        args = tool_call['args']
+                        store_mistake(
+                            native_lang=args['native_lang'],
+                            target_lang=args['target_lang'],
+                            error_sentence=args['error_sentence'],
+                            corrected_sentence=args['corrected_sentence'],
+                            error_type=args['error_type']
+                        )
+                
+                # Get follow-up response after tool execution
+                follow_up = st.session_state.conversation.invoke(
+                    {
+                        **input_data,
+                        "input": "[CONTINUE] Please provide natural follow-up to the corrected sentence"
+                    },
+                    config={"configurable": {"session_id": st.session_state.session_id}}
+                )
+                follow_up_content, _ = process_response(follow_up)
+                
+                # Combine responses
+                full_response = f"{response_content}\n{follow_up_content}"
+                st.session_state.chat_history.append(AIMessage(content=full_response))
+            else:
+                full_response = response_content
+                st.session_state.chat_history.append(AIMessage(content=full_response))
+            
+            # Add to display messages
+            st.session_state.messages.append({
+                "role": "assistant", 
+                "content": full_response
+            })
+            
+        except Exception as e:
+            st.error(f"Error in conversation: {str(e)}")
+        
         st.rerun()
 
-# Update the initial message handling
+# Initial lesson message
 if not st.session_state.messages and st.session_state.config:
     with st.spinner("Preparing first lesson..."):
-        first_msg = st.session_state.conversation.invoke(
-            {"input": f"Begin {st.session_state.config['scenario']} scenario", **st.session_state.config},
-            config={"configurable": {"session_id": st.session_state.session_id}}
-        )
-        print(first_msg)
-        st.session_state.messages.append({
-            "role": "assistant",
-            "content": first_msg.content
-        })
-        st.rerun()
+        try:
+            input_data = {
+                "input": f"Begin {st.session_state.config['scenario']} scenario in {st.session_state.config['learning_language']}",
+                "native_language": st.session_state.config['native_language'],
+                "learning_language": st.session_state.config['learning_language'],
+                "proficiency_level": st.session_state.config['proficiency_level'],
+                "scenario": st.session_state.config['scenario'],
+                "chat_history": []
+            }
+            
+            response = st.session_state.conversation.invoke(
+                input_data,
+                config={"configurable": {"session_id": st.session_state.session_id}}
+            )
+            
+            response_content, _ = process_response(response)
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": response_content
+            })
+            st.session_state.chat_history.append(AIMessage(content=response_content))
+            st.rerun()
+        except Exception as e:
+            st.error(f"Error starting conversation: {str(e)}")
 
 # Empty state
 if not st.session_state.config:

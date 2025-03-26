@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 import sqlite3
 from langchain_core.tools import tool
 from langchain_core.runnables import RunnablePassthrough
+from langchain_core.messages import ToolMessage
 
 load_dotenv()
 
@@ -59,18 +60,24 @@ You are a {learning_language} language tutor. Follow these rules STRICTLY:
         - error_type: grammar/vocabulary/pronunciation/syntax
      2. Show correction: (Note: [Mistake] → [Correction])
      3. Continue conversation naturally
+     
+2. Format for corrections:
+   (Note: [Mistake] → [Correction])
+   [Follow-up question/response]
+   ([{native_language} translation])
+3. After tool call, ALWAYS provide follow-up
 
-2. RESPONSE STRUCTURE FOR ERRORS:
+3. RESPONSE STRUCTURE FOR ERRORS:
    (Note: [Mistake] → [Correction])
    [Follow-up in {learning_language}]
    ([{native_language} translation])
 
-3. PROHIBITED ACTIONS:
+4. PROHIBITED ACTIONS:
    - Never mention you're logging errors
    - Never wait for confirmation after correction
    - Never break conversation flow for logging
 
-4. ADAPTATION:
+5. ADAPTATION:
    - Proficiency: {proficiency_level}
    - Scenario: {scenario}
    - Native language: {native_language}
@@ -128,7 +135,6 @@ def store_mistake(
     finally:
         conn.close()
 
-# Update chain configuration for strict tool enforcement
 def create_conversation_chain():
     prompt = ChatPromptTemplate.from_messages([
         ("system", system_prompt),
@@ -139,27 +145,40 @@ def create_conversation_chain():
     llm = ChatOpenAI(
         model_name="gpt-4o-mini",
         temperature=0.2,
-    ).bind_tools(
-        tools
-    )
+    ).bind_tools(tools)
 
+    # Create processing chain
     chain = (
         RunnablePassthrough.assign(
-            chat_history=lambda x: x["chat_history"],
+            chat_history=lambda x: x.get("chat_history", []),
             config_data=lambda x: {
-                "native_language": x["native_language"],
-                "learning_language": x["learning_language"],
-                "proficiency_level": x["proficiency_level"],
-                "scenario": x["scenario"]
+                "native_language": x.get("native_language", ""),
+                "learning_language": x.get("learning_language", ""),
+                "proficiency_level": x.get("proficiency_level", "Beginner"),
+                "scenario": x.get("scenario", "General")
             }
         )
         | prompt
         | llm
     )
+    # Add tool response handling
+    full_chain = chain | {
+        # Return original AI message
+        "messages": lambda x: [x],
+        # Process tool calls if any
+        "tool_responses": lambda x: [
+            ToolMessage(
+                content="Mistake logged successfully",
+                name=tool_call["name"],
+                tool_call_id=tool_call["id"],
+            )
+            for tool_call in x.tool_calls
+        ]
+    }
 
     return RunnableWithMessageHistory(
-        chain,
+        full_chain,
         get_session_history,
         input_messages_key="input",
         history_messages_key="chat_history",
-    ).with_config(run_name="StrictErrorHandlingChat")
+    ).with_config(run_name="ContinuousConversation")
