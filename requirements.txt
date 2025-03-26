@@ -1,0 +1,5 @@
+streamlit
+pyttsx3 
+langchain-openai
+dotenv
+langchain
