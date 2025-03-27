@@ -152,7 +152,7 @@ def get_feedback_with_graph() -> Tuple[str, Optional[object]]:
     # Generate feedback prompt and invoke LLM for text feedback
     prompt = (
         f"Based on the following list of mistakes made by the user:\n{mistakes_str}\n\n"
-        "Generate a detailed feedback message that includes a score out of 100, good practices to follow, "
+        "Generate a detailed feedback message that includes list of errors, it's correction and explanation , a score out of 100, good practices to follow, "
         "and suggestions on how to avoid these mistakes in the future.Make it short and concise with motivation quotes at last."
     )
     llm = ChatOpenAI(model_name="gpt-4o-mini", temperature=0.5)

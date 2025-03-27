@@ -100,14 +100,14 @@ if user_input:
                         error_type=args['error_type']
                     )
                     logged_errors.add(error_key)
-                # Always create a tool message for each tool_call id
-                tool_response_text = f"Logged mistake: {args.get('error_sentence')} → {args.get('corrected_sentence')}"
-                tool_msg = ToolMessage(content=tool_response_text, tool_call_id=tool_call['id'])
-                st.session_state.messages.append({
+                    # Always create a tool message for each tool_call id
+                    tool_response_text = f"Logged mistake: {args.get('error_sentence')} → {args.get('corrected_sentence')}"
+                    st.session_state.messages.append({
                     "role": "tool",
                     "content": tool_response_text,
                     "tool_call_id": tool_call['id']
-                })
+                    })
+                tool_msg = ToolMessage(content=tool_response_text, tool_call_id=tool_call['id'])
                 get_session_history(st.session_state.session_id).add_messages([tool_msg])
             
             follow_up = st.session_state.conversation.invoke(
