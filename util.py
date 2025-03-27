@@ -29,21 +29,26 @@ class InMemoryHistory(BaseChatMessageHistory):
 # -------------------------------
 # Initialize SQLite DB for storing mistakes
 # -------------------------------
+
 def init_db():
-    conn = sqlite3.connect('language_errors.db')
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS mistakes
-                    (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                     native_language TEXT,
-                     target_language TEXT,
-                     error_sentence TEXT,
-                     corrected_sentence TEXT,
-                     error_type TEXT)''')
-    conn.commit()
-    conn.close()
+    with sqlite3.connect('language_errors.db') as conn:
+        c = conn.cursor()
+        c.execute('DROP TABLE IF EXISTS mistakes')
+        c.execute('''
+            CREATE TABLE mistakes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                native_language TEXT,
+                target_language TEXT,
+                error_sentence TEXT,
+                corrected_sentence TEXT,
+                error_type TEXT
+            )
+        ''')
+        conn.commit()
 
 init_db()
+
 
 # -------------------------------
 # Session history store for chain internal history
@@ -60,31 +65,34 @@ def get_session_history(session_id: str) -> InMemoryHistory:
 # -------------------------------
 system_prompt = """
 You are a {learning_language} language tutor. Follow these rules STRICTLY:
- 
- 1. MISTAKE HANDLING (HIGHEST PRIORITY):
-    - When an error is detected:
-      1. Immediately call the log_mistake tool with:
-         - error_sentence: Exact erroneous text
-         - corrected_sentence: Full corrected sentence
-         - error_type: grammar/vocabulary/pronunciation/syntax
-      2. Show correction: (Note: [Mistake] → [Correction])
-      3. Continue conversation naturally
- 
- 2. RESPONSE STRUCTURE FOR ERRORS:
-    (Note: [Mistake] → [Correction])
-    [Follow-up in {learning_language}]
-    ([{native_language} translation])
- 
- 3. PROHIBITED ACTIONS:
-    - Never mention you're logging errors
-    - Never wait for confirmation after correction
-    - Never break conversation flow for logging
- 
- 4. ADAPTATION:
-    - Proficiency: {proficiency_level}
-    - Scenario: {scenario}
-    - Native language: {native_language}
+
+1. MISTAKE HANDLING (HIGHEST PRIORITY):
+   - When an error is detected:
+     1. Immediately call the log_mistake tool with:
+        - error_sentence: Exact erroneous text
+        - corrected_sentence: Full corrected sentence
+        - error_type: grammar/vocabulary/pronunciation/syntax
+     2. Show correction: (Note: [Mistaken word] → [Corrected word])
+     3. Continue conversation naturally
+
+2. RESPONSE STRUCTURE FOR ERRORS:
+   (Note: [Mistaken word] → [Corrected word])\n\n
+   [Follow-up in {learning_language}]\n
+   ([{native_language} translation])\n
+
+3. ADAPT TO LEARNER'S LEVEL:
+   - For beginners, use simple sentences and basic vocabulary.
+   - For intermediate learners, use richer vocabulary, varied tenses, and include one idiom.
+   - For advanced learners, use complex grammar with cultural references.
+
+4. SCENARIO-BASED TEACHING:
+   - Focus the conversation on the {scenario} context.
+   - Engage with relevant follow-up questions to sustain a natural dialogue.
+
+5. INITIATE THE CONVERSATION:
+   - Start with an engaging opening that suits a {proficiency_level} learner.
 """
+
 
 # -------------------------------
 # Tool to log mistakes into the database
@@ -150,13 +158,18 @@ def get_feedback_with_graph() -> Tuple[str, Optional[object]]:
         for _, row in df.iterrows()
     ])
     # Generate feedback prompt and invoke LLM for text feedback
-    prompt = (
-        f"Based on the following list of mistakes made by the user:\n{mistakes_str}\n\n"
-        "Generate a detailed feedback message that includes list of errors, it's correction and explanation , a score out of 100, good practices to follow, "
-        "and suggestions on how to avoid these mistakes in the future.Make it short and concise with motivation quotes at last."
-    )
+    feedback_prompt = f"""Based on the following list of mistakes made by the user: {mistakes_str}
+
+                            Generate a detailed feedback message only from user errors:
+                            - A performance score out of 100\n
+                            - A list of errors with their corrections and brief explanations\n
+                            - Recommended best practices\n
+                            - Practical suggestions to prevent these mistakes in the future\n
+                            
+                            Keep the response short, concise, and professional. Conclude with a motivational quote, and avoid using a letter format (no salutations or closing remarks).
+                        """
     llm = ChatOpenAI(model_name="gpt-4o-mini", temperature=0.5)
-    feedback = llm.invoke(prompt)
+    feedback = llm.invoke(feedback_prompt)
     feedback_text = feedback.content
 
     # Use Plotly to create an interactive donut chart showing error distribution
@@ -165,7 +178,6 @@ def get_feedback_with_graph() -> Tuple[str, Optional[object]]:
     fig = px.pie(error_counts, names='error_type', values='count',
                  title="Error Distribution", hole=0.4,
                  color_discrete_sequence=px.colors.qualitative.Vivid)
-    # Enable interactive features (hover, zoom, etc.) via Plotly defaults.
     return (feedback_text, fig)
 
 # -------------------------------
