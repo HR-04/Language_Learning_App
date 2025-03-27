@@ -3,3 +3,8 @@ pyttsx3
 langchain-openai
 dotenv
 langchain
+matplotlib 
+seaborn
+plotly
+requests
+pandas

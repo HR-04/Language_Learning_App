@@ -1,8 +1,7 @@
 import streamlit as st
-from util import create_conversation_chain, store_mistake
-import sqlite3
+from util import create_conversation_chain, store_mistake, get_session_history, get_feedback_with_graph
 import uuid
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 
 def init_session_state():
     if "conversation" not in st.session_state:
@@ -13,188 +12,134 @@ def init_session_state():
         st.session_state.config = {}
     if "session_id" not in st.session_state:
         st.session_state.session_id = str(uuid.uuid4())
-    if "chat_history" not in st.session_state:
-        st.session_state.chat_history = []
 
 init_session_state()
 
-# UI Setup
-st.set_page_config(page_title="Language Tutor", page_icon="🗣️")
+# Page configuration and header
+st.set_page_config(page_title="Language Tutor", page_icon="🗣️", layout="wide")
 st.title("🗣️ Language Learning Chatbot")
+st.markdown("Welcome! Use this chat to practice your language skills.")
 
-# Sidebar Configuration
+# Sidebar: Lesson Settings and Buttons side by side
 with st.sidebar:
-    st.header("⚙️ Lesson Settings")
-    
+    st.header("Lesson Settings")
     col1, col2 = st.columns(2)
     with col1:
         native_lang = st.text_input("Native Language", placeholder="English")
     with col2:
-        target_lang = st.text_input("Target Language", placeholder="Spanish")
-    
+        target_lang = st.text_input("Target Language", placeholder="French")
     proficiency = st.selectbox("Proficiency", ["Beginner", "Intermediate", "Advanced"])
-    scenario = st.selectbox("Scenario", [
-        "Restaurant", "Hotel", "Shopping", 
-        "Directions", "Social", "Work"
-    ])
+    scenario = st.selectbox("Scenario", ["Restaurant", "Hotel", "Shopping", "Directions", "Social", "Work"])
     
-    if st.button("🚀 Start Lesson", use_container_width=True):
-        if all([native_lang, target_lang]):
-            st.session_state.config = {
-                "native_language": native_lang,
-                "learning_language": target_lang,
-                "proficiency_level": proficiency,
-                "scenario": scenario
-            }
-            st.session_state.session_id = str(uuid.uuid4())
-            st.session_state.messages = []
-            st.session_state.chat_history = []
-            st.rerun()
-        else:
-            st.error("Please specify both languages")
-
-# Chat Display
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.write(message["content"])
-
-def process_response(response):
-    """Helper function to handle different response types"""
-    if hasattr(response, 'content'):
-        return response.content, getattr(response, 'tool_calls', [])
-    elif isinstance(response, dict):
-        ai_message = response.get('messages', [{}])[0]
-        content = ai_message.get('content', '') if isinstance(ai_message, dict) else getattr(ai_message, 'content', '')
-        tool_calls = ai_message.get('tool_calls', []) if isinstance(ai_message, dict) else getattr(ai_message, 'tool_calls', [])
-        return content, tool_calls
-    return str(response), []
-
-if prompt := st.chat_input("Type your message..."):
-    # Add user message to both display and history
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    st.session_state.chat_history.append(HumanMessage(content=prompt))
-    
-    with st.spinner("Thinking..."):
-        try:
-            # Prepare input with all required parameters
-            input_data = {
-                "input": prompt,
-                "native_language": st.session_state.config['native_language'],
-                "learning_language": st.session_state.config['learning_language'],
-                "proficiency_level": st.session_state.config['proficiency_level'],
-                "scenario": st.session_state.config['scenario'],
-                "chat_history": st.session_state.chat_history
-            }
-            
-            # Get initial response
-            response = st.session_state.conversation.invoke(
-                input_data,
-                config={"configurable": {"session_id": st.session_state.session_id}}
-            )
-            
-            # Process the response
-            response_content, tool_calls = process_response(response)
-            
-            # Process tool calls if any
-            if tool_calls:
-                for tool_call in tool_calls:
-                    if tool_call['name'] == 'log_mistake':
-                        args = tool_call['args']
-                        store_mistake(
-                            native_lang=args['native_lang'],
-                            target_lang=args['target_lang'],
-                            error_sentence=args['error_sentence'],
-                            corrected_sentence=args['corrected_sentence'],
-                            error_type=args['error_type']
-                        )
-                
-                # Get follow-up response after tool execution
-                follow_up = st.session_state.conversation.invoke(
-                    {
-                        **input_data,
-                        "input": "[CONTINUE] Please provide natural follow-up to the corrected sentence"
-                    },
-                    config={"configurable": {"session_id": st.session_state.session_id}}
-                )
-                follow_up_content, _ = process_response(follow_up)
-                
-                # Combine responses
-                full_response = f"{response_content}\n{follow_up_content}"
-                st.session_state.chat_history.append(AIMessage(content=full_response))
+    st.markdown("---")
+    btn_col1, btn_col2 = st.columns(2)
+    with btn_col1:
+        if st.button("🚀 Start Lesson", use_container_width=True):
+            if all([native_lang, target_lang]):
+                st.session_state.config = {
+                    "native_language": native_lang,
+                    "learning_language": target_lang,
+                    "proficiency_level": proficiency,
+                    "scenario": scenario
+                }
+                st.session_state.session_id = str(uuid.uuid4())
+                st.session_state.messages = []
+                st.rerun()
             else:
-                full_response = response_content
-                st.session_state.chat_history.append(AIMessage(content=full_response))
-            
-            # Add to display messages
-            st.session_state.messages.append({
-                "role": "assistant", 
-                "content": full_response
-            })
-            
-        except Exception as e:
-            st.error(f"Error in conversation: {str(e)}")
-        
-        st.rerun()
-
-# Initial lesson message
-if not st.session_state.messages and st.session_state.config:
-    with st.spinner("Preparing first lesson..."):
-        try:
-            input_data = {
-                "input": f"Begin {st.session_state.config['scenario']} scenario in {st.session_state.config['learning_language']}",
-                "native_language": st.session_state.config['native_language'],
-                "learning_language": st.session_state.config['learning_language'],
-                "proficiency_level": st.session_state.config['proficiency_level'],
-                "scenario": st.session_state.config['scenario'],
-                "chat_history": []
-            }
-            
-            response = st.session_state.conversation.invoke(
-                input_data,
-                config={"configurable": {"session_id": st.session_state.session_id}}
-            )
-            
-            response_content, _ = process_response(response)
+                st.error("Please specify both languages")
+    with btn_col2:
+        if st.button("Generate Feedback", use_container_width=True):
+            feedback_text, feedback_fig = get_feedback_with_graph()
+            # Clear previous conversation and show only feedback in chat space
+            st.session_state.messages = []
+            feedback_msg = AIMessage(content=feedback_text)
             st.session_state.messages.append({
                 "role": "assistant",
-                "content": response_content
+                "content": feedback_text,
+                "figure": feedback_fig
             })
-            st.session_state.chat_history.append(AIMessage(content=response_content))
+            get_session_history(st.session_state.session_id).clear()
+            get_session_history(st.session_state.session_id).add_messages([feedback_msg])
             st.rerun()
-        except Exception as e:
-            st.error(f"Error starting conversation: {str(e)}")
 
-# Empty state
+# Main chat container
+chat_container = st.container()
+with chat_container:
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.write(message["content"])
+            if "figure" in message and message["figure"] is not None:
+                st.plotly_chart(message["figure"], use_container_width=True)
+
+# Chat input area
+user_input = st.chat_input("Type your message...")
+if user_input:
+    st.session_state.messages.append({"role": "user", "content": user_input})
+    user_msg = HumanMessage(content=user_input)
+    get_session_history(st.session_state.session_id).add_messages([user_msg])
+    
+    with st.spinner("Thinking..."):
+        response = st.session_state.conversation.invoke(
+            {"input": user_input, **st.session_state.config},
+            config={"configurable": {"session_id": st.session_state.session_id}}
+        )
+        print(f"response: {response}")
+        
+        # Track unique error keys for DB logging (only log once per error)
+        logged_errors = set()
+        if hasattr(response, 'tool_calls') and response.tool_calls:
+            for tool_call in response.tool_calls:
+                args = tool_call['args']
+                error_key = (args['error_sentence'], args['corrected_sentence'])
+                if error_key not in logged_errors:
+                    store_mistake(
+                        native_lang=args['native_lang'],
+                        target_lang=args['target_lang'],
+                        error_sentence=args['error_sentence'],
+                        corrected_sentence=args['corrected_sentence'],
+                        error_type=args['error_type']
+                    )
+                    logged_errors.add(error_key)
+                # Always create a tool message for each tool_call id
+                tool_response_text = f"Logged mistake: {args.get('error_sentence')} → {args.get('corrected_sentence')}"
+                tool_msg = ToolMessage(content=tool_response_text, tool_call_id=tool_call['id'])
+                st.session_state.messages.append({
+                    "role": "tool",
+                    "content": tool_response_text,
+                    "tool_call_id": tool_call['id']
+                })
+                get_session_history(st.session_state.session_id).add_messages([tool_msg])
+            
+            follow_up = st.session_state.conversation.invoke(
+                {"input": "Continue the conversation naturally", **st.session_state.config},
+                config={"configurable": {"session_id": st.session_state.session_id}}
+            )
+            response_content = follow_up.content
+        else:
+            response_content = response.content
+
+        st.session_state.messages.append({
+            "role": "assistant",
+            "content": response_content
+        })
+        assistant_msg = AIMessage(content=response_content)
+        get_session_history(st.session_state.session_id).add_messages([assistant_msg])
+        st.rerun()
+
+# Initialize conversation if no messages and config is set
+if not st.session_state.messages and st.session_state.config:
+    with st.spinner("Preparing first lesson..."):
+        first_msg = st.session_state.conversation.invoke(
+            {"input": f"Begin {st.session_state.config['scenario']} scenario", **st.session_state.config},
+            config={"configurable": {"session_id": st.session_state.session_id}}
+        )
+        st.session_state.messages.append({
+            "role": "assistant",
+            "content": first_msg.content
+        })
+        initial_msg = AIMessage(content=first_msg.content)
+        get_session_history(st.session_state.session_id).add_messages([initial_msg])
+        st.rerun()
+
 if not st.session_state.config:
     st.info("Configure your lesson in the sidebar to begin")
-
-# Error Log Sidebar
-with st.sidebar:
-    st.header("📝 Error Log")
-    if st.button("View Mistakes"):
-        try:
-            conn = sqlite3.connect('language_errors.db')
-            c = conn.cursor()
-            c.execute("""
-                SELECT timestamp, error_sentence, corrected_sentence, error_type 
-                FROM mistakes 
-                ORDER BY timestamp DESC 
-                LIMIT 10
-            """)
-            mistakes = c.fetchall()
-            
-            if mistakes:
-                st.subheader("Recent Mistakes")
-                for m in mistakes:
-                    st.markdown(f"""
-                    **Error**: `{m[1]}`  
-                    **Correction**: `{m[2]}`  
-                    **Type**: {m[3]}  
-                    *{m[0]}*
-                    """)
-            else:
-                st.info("No mistakes logged yet")
-        except Exception as e:
-            st.error(f"Error accessing database: {str(e)}")
-        finally:
-            conn.close()
