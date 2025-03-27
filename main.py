@@ -1,6 +1,6 @@
 import streamlit as st
 import uuid
-from util import create_conversation_chain, store_mistake, get_session_history, get_feedback_with_graph
+from util import create_conversation_chain, log_mistake, get_session_history, get_feedback_with_graph
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 
 
@@ -18,7 +18,6 @@ def initialize_session():
     st.session_state.setdefault("lesson_initialized", False)
 
 initialize_session()
-
 
 # Generate AI Feedback and Disable Chat
 def generate_feedback():
@@ -133,16 +132,15 @@ if st.session_state.get("lesson_initialized", False) and not st.session_state.ge
                     
                     # Log the mistake only once
                     if error_key not in logged_errors:
-                        store_mistake(
-                            native_lang=args['native_lang'],
-                            target_lang=args['target_lang'],
-                            error_sentence=args['error_sentence'],
-                            corrected_sentence=args['corrected_sentence'],
-                            error_type=args['error_type']
-                        )
+                        log_mistake.run({
+                            "native_lang":args['native_lang'],
+                            "target_lang":args['target_lang'],
+                            "error_sentence":args['error_sentence'],
+                            "corrected_sentence":args['corrected_sentence'],
+                            "error_type":args['error_type']
+                        })
                         logged_errors.add(error_key)
-                    
-                        # Always append a tool message for each tool call, regardless of duplicates
+                
                         tool_response_text = f"Logged mistake: {args['error_sentence']} → {args['corrected_sentence']}"
                         st.session_state.messages.append({
                             "role": "tool",

@@ -105,7 +105,6 @@ You are a {learning_language} language tutor. Follow these rules STRICTLY:
 
 
 # Tool to log mistakes
-
 @tool
 def log_mistake(
     native_lang: str,
@@ -127,22 +126,6 @@ def log_mistake(
         print(f"❌ Error logging mistake: {str(e)}")
 
 tools = [log_mistake]
-
-def store_mistake(
-    native_lang: str,
-    target_lang: str, 
-    error_sentence: str,
-    corrected_sentence: str,
-    error_type: str
-) -> None:
-    """Triggers log_mistake tool for error tracking."""
-    log_mistake.run({
-        "native_lang": native_lang,
-        "target_lang": target_lang,
-        "error_sentence": error_sentence,
-        "corrected_sentence": corrected_sentence,
-        "error_type": error_type
-    })
 
 
 # Generate feedback and charts
